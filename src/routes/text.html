@@ -1,0 +1,22 @@
+<!DOCTYPE html>
+<script src="a.php"></script>
+<SCRIPT Language = "JavaScript">
+    function func()
+    {
+        if(confirm("Are you OK with this?"))
+        {
+            this.location = "a.php?action=ok";
+        }
+        else
+        {
+            this.location = "a.php?action=cancel";
+        }
+    }
+</SCRIPT>
+<html>
+<head>
+</head>
+<body>
+<a href="#" href="#" onClick="javascript:func();">Please Click</a>
+</body>
+</html>

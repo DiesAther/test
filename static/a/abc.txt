@@ -1,0 +1,125 @@
+这是文件abc.txt的内容
+
+
+/**
+ * Created by Kevin on 16/7/2015.
+ */
+'use strict';
+var co = require('co');
+var mysql = require('mysql');
+
+var NODE_ENV = process.env.NODE_ENV || 'development';
+var config = require(`../config/${NODE_ENV}.js`);
+var mysqlPool = null;
+if (!mysqlPool){
+    mysqlPool = mysql.createPool(config.db);
+}
+const leftPad = require('left-pad');
+const MKORedis = require('../database/MKORedis');
+
+class MKODBAction{
+    constructor(){
+    }
+
+    getDBConnection(){
+        return function(cb){
+            mysqlPool.getConnection(cb);
+        };
+    }
+
+    execSQL(sql, values, dbConnection){
+        return function(cb){
+            let start = new Date();
+            let query = dbConnection.query(sql, values, function(err, result){
+                let ms = new Date() - start;
+                console.log(`EXEC SQL: "${query.sql}" ${ms}ms`);
+                if (err){
+                    cb(err);
+                    console.log(err);
+                    return;
+                }
+                cb(null, result);
+            });
+        }
+    }
+}
+
+const dbAction = new MKODBAction();
+
+
+var dispatchNotify = function(orderID, cb){
+    co(function*(){
+        let dbConnection = yield dbAction.getDBConnection();
+        let sql = 'SELECT * FROM YQYD_Order WHERE orderID = ? AND status = 0 LIMIT 1';
+        let orderInfo = yield dbAction.execSQL(sql, [orderID], dbConnection);
+        
+        if (orderInfo && orderInfo.length > 0){
+
+            let totalKey = `stat_activity_order_summary_${orderInfo.activityID}`;
+            let insertedCount = yield (function(cb){ MKORedis.sadd(totalKey, orderID, cb) });
+
+            let orderCount = yield (function(cb){ MKORedis.scard(totalKey, cb) });
+            sql = 'UPDATE YQYD_Order SET status = 1 , registerNumber = ? WHERE orderID = ? ';
+            yield dbAction.execSQL(sql, [orderID, orderCount], dbConnection);
+
+            let dateNow = new Date();
+            if (insertedCount > 0){
+                let dateKey = `${dateNow.getFullYear()}${leftPad(dateNow.getMonth() + 1, 2, 0)}${leftPad(dateNow.getDate(), 2, 0)}`;
+                dateKey = `stat_activity_order_logs_${orderInfo.activityID}_${dateKey}`;
+                MKORedis.incrby(dateKey, 1);
+            }
+        }else {
+            console.error(`找不到订单号 ${orderID}, 或者已经支付成功`);
+        }
+        dbConnection.release();
+        cb(null);
+    }).catch(function(e){
+        console.error(`dispatchNotify: ${e}`);
+        cb(e);
+    });
+}
+
+var http = require('http');
+http.createServer(function (req, res) {
+    req.setEncoding('utf8');
+    var postData = "";
+    req.addListener("data", function (chunk) {
+        postData += chunk;
+    });
+    req.addListener("end", function () {
+        var resp = function (ret, status_code) {
+            res.writeHead(status_code, {
+                "Content-Type": "text/plain; charset=utf-8"
+            });
+            res.end(ret);
+        }
+        try {
+            var event = JSON.parse(postData);
+            if (event.type === undefined) {
+                return resp('Event 对象中缺少 type 字段', 400);
+            }
+            switch (event.type) {
+                case "charge.succeeded":
+                    resp("OK", 200);
+                    var paid = event.data.object.paid;
+                    if (paid == null || paid === undefined)
+                        return;
+                    var order_no = event.data.object.order_no;
+                    dispatchNotify(order_no, function(err){
+
+                    });
+                    break;
+                case "refund.succeeded":
+                    // 开发者在此处加入对退款异步通知的处理代码
+                    return resp("OK", 200);
+                    break;
+                default:
+                    return resp("未知 Event 类型", 400);
+                    break;
+            }
+        } catch (err) {
+            return resp('JSON 解析失败', 400);
+        }
+    });
+}).listen(3003, "0.0.0.0");
+
