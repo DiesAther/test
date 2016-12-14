@@ -297,6 +297,16 @@ mainRouter.get('/person', co.wrap(function *(ctx, next) {
         database: 'lily'
     });
     connection.connect();
+    if(action=="register"){
+        yield (function (cb) {
+            connection.query(`INSERT INTO admin SET name =? ,password=?,power="1"`, [name, pass], function (err, rows) {
+                ctx.body = '注册成功'
+                cb(err)
+            });
+            connection.end();
+        })
+
+    }
     if (action=="login"){
         yield(function(cb){
                 connection.query(`SELECT * FROM admin`,function(err,admin){
